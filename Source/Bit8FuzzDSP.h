@@ -6,14 +6,11 @@
 // Parameters are in natural units (not 0..1), the plugin wrapper maps them
 // from its own parameter ranges.
 struct Bit8FuzzParams {
-    float driveDb  = 18.f;      // 0 .. 48    pre-clip gain
-    float bias     = 0.10f;     // -1 .. 1    0 = symmetric; more = even harmonics, then gated "sputter"
-    float hardness = 0.6f;      // 0 .. 1     0 = soft (tanh), 1 = hard clip (towards square wave)
-    float bits     = 8.f;       // 1 .. 16    quantizer resolution (fractional values allowed)
-    float rateHz   = 11025.f;   // 500 .. sr  sample-and-hold rate (aliasing is intentional)
-    float toneHz   = 6000.f;    // 500 .. 20000  post low-pass to tame the fizz
-    float mix      = 1.f;       // 0 .. 1     dry/wet
-    float outDb    = -6.f;      // -24 .. 6   output level
+    float driveDb = 18.f;       // 0 .. 24     pre-clip gain
+    float bits    = 8.f;        // 4, 8 or 16  quantizer resolution
+    float rateHz  = 11025.f;    // 500 .. 48000  sample-and-hold rate (aliasing is intentional)
+    float toneHz  = 6000.f;     // 500 .. 20000  post low-pass to tame the fizz
+    float outDb   = -6.f;       // -6 .. 3     output level
 };
 
 class Bit8FuzzDSP {
@@ -23,7 +20,6 @@ public:
     void prepare(double sampleRate, int numChannels) {
         sr = (float) sampleRate;
         held.assign(numChannels, 0.f);
-        dc.assign(numChannels, 0.f);
         lp.assign(numChannels, 0.f);
         phase = 1.f;                         // capture a sample right away
     }
@@ -36,7 +32,6 @@ public:
         const float step  = 2.f / std::exp2(std::max(1.f, p.bits));   // quantizer step over -1..1
         const float inv   = 1.f / step;
         const float inc   = std::min(1.f, std::max(100.f, p.rateHz) / sr);
-        const float aDc   = 1.f - std::exp(-twoPi * 20.f / sr);
         const float tone  = std::min(std::max(p.toneHz, 200.f), 0.45f * sr);
         const float aLp   = 1.f - std::exp(-twoPi * tone / sr);
 
@@ -47,39 +42,31 @@ public:
             if (grab) phase -= 1.f;
 
             for (int ch = 0; ch < numCh; ++ch) {
-                const float dry = io[ch][i];
+                // 1) fuzz
+                const float x = fuzzClip(io[ch][i] * g);
 
-                // 1) fuzz: bias is added BEFORE the gain, so at high drive it
-                //    starves one side of the wave (classic gated fuzz)
-                float x = (dry + p.bias * 0.5f) * g;
-                x = fuzzClip(x, p.hardness);
-
-                // 2) remove the DC offset the bias just created
-                dc[ch] += aDc * (x - dc[ch]);
-                x -= dc[ch];
-
-                // 3) bit crush + sample-rate reduction (mid-tread quantizer)
+                // 2) bit crush + sample-rate reduction (mid-tread quantizer)
                 if (grab) held[ch] = std::floor(x * inv + 0.5f) * step;
-                float y = held[ch];
 
-                // 4) tone
-                lp[ch] += aLp * (y - lp[ch]);
-                y = lp[ch];
-
-                io[ch][i] = (dry * (1.f - p.mix) + y * p.mix) * outG;
+                // 3) tone, then output level
+                lp[ch] += aLp * (held[ch] - lp[ch]);
+                io[ch][i] = lp[ch] * outG;
             }
         }
     }
 
 private:
+    // 0 = soft (tanh), 1 = hard clip. Fixed value; tweak by ear.
+    static constexpr float kHardness = 0.6f;
+
     float sr = 44100.f, phase = 1.f;
-    std::vector<float> held, dc, lp;
+    std::vector<float> held, lp;
 
     static float dbToGain(float db) { return std::pow(10.f, db * 0.05f); }
 
-    static float fuzzClip(float x, float hardness) {
+    static float fuzzClip(float x) {
         const float soft = std::tanh(x);
         const float hard = std::max(-1.f, std::min(1.f, x));
-        return soft + hardness * (hard - soft);
+        return soft + kHardness * (hard - soft);
     }
 };

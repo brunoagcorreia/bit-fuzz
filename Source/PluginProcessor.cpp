@@ -7,14 +7,11 @@ BitFuzzAudioProcessor::BitFuzzAudioProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createLayout())
 {
-    driveP    = apvts.getRawParameterValue ("drive");
-    biasP     = apvts.getRawParameterValue ("bias");
-    hardnessP = apvts.getRawParameterValue ("hardness");
-    bitsP     = apvts.getRawParameterValue ("bits");
-    rateP     = apvts.getRawParameterValue ("rate");
-    toneP     = apvts.getRawParameterValue ("tone");
-    mixP      = apvts.getRawParameterValue ("mix");
-    outputP   = apvts.getRawParameterValue ("output");
+    driveP  = apvts.getRawParameterValue ("drive");
+    bitsP   = apvts.getRawParameterValue ("bits");
+    rateP   = apvts.getRawParameterValue ("rate");
+    toneP   = apvts.getRawParameterValue ("tone");
+    outputP = apvts.getRawParameterValue ("output");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout BitFuzzAudioProcessor::createLayout()
@@ -22,12 +19,25 @@ juce::AudioProcessorValueTreeState::ParameterLayout BitFuzzAudioProcessor::creat
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
     for (const auto& p : kParams)
-        layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { p.id, 1 },          // version hint, needed for AU
-            p.name,
-            juce::NormalisableRange<float> (p.min, p.max, p.interval, p.skew),
-            p.def,
-            juce::AudioParameterFloatAttributes().withLabel (p.unit)));
+    {
+        if (p.isChoice)
+        {
+            layout.add (std::make_unique<juce::AudioParameterChoice> (
+                juce::ParameterID { p.id, 1 },
+                p.name,
+                juce::StringArray { "4 bit", "8 bit", "16 bit" },
+                (int) p.def));
+        }
+        else
+        {
+            layout.add (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { p.id, 1 },          // version hint, needed for AU
+                p.name,
+                juce::NormalisableRange<float> (p.min, p.max, p.interval, p.skew),
+                p.def,
+                juce::AudioParameterFloatAttributes().withLabel (p.unit)));
+        }
+    }
 
     return layout;
 }
@@ -58,14 +68,13 @@ void BitFuzzAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     // Copy the current parameter values (already in real units) into the DSP core
     auto& p = dsp.p;
-    p.driveDb  = driveP->load();
-    p.bias     = biasP->load();
-    p.hardness = hardnessP->load();
-    p.bits     = bitsP->load();
-    p.rateHz   = rateP->load();
-    p.toneHz   = toneP->load();
-    p.mix      = mixP->load();
-    p.outDb    = outputP->load();
+    p.driveDb = driveP->load();
+    p.rateHz  = rateP->load();
+    p.toneHz  = toneP->load();
+    p.outDb   = outputP->load();
+
+    const int bitsIndex = juce::jlimit (0, 2, (int) std::lround (bitsP->load()));
+    p.bits = kBitDepths[bitsIndex];
 
     const int numCh = juce::jmin (buffer.getNumChannels(), preparedChannels);
     dsp.process (buffer.getArrayOfWritePointers(), numCh, buffer.getNumSamples());
